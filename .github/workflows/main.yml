@@ -1,0 +1,69 @@
+on:
+  schedule:
+    - cron:  '0 19 * * *'
+  workflow_dispatch:
+
+name: releases
+jobs:
+  releases:
+    runs-on: ubuntu-latest
+    steps: 
+      - name: get-id
+        id: get_id
+        run: |
+          #TMP_DIRECTORY="$(mktemp -d)"
+          #RELEASE_LATEST="$(curl -IkLs -o ${TMP_DIRECTORY}/NUL -w %{url_effective} ${{ secrets.SOURCE_VERSION }} | grep -o "[^/]*$")"
+          RELEASE_LATEST="$(curl -IkLs -o /tmp/NUL -w %{url_effective} ${{ secrets.SOURCE_VERSION }} | grep -o "[^/]*$")"
+          RELEASE_LATEST="v${RELEASE_LATEST#v}"
+          echo "ID=$RELEASE_LATEST" >> $GITHUB_OUTPUT
+      - name: checkout
+        uses: actions/checkout@v3
+        with:
+         repository: ${{ secrets.SOURCE_REPOSITORY }}
+         ref: ${{ steps.get_id.outputs.ID }}
+      - name: get-version
+        id: get_version
+        run: |
+          echo "VER=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
+          GOVER="$(curl -sLf 'https://golang.org/VERSION?m=text')"
+          echo "GO_VERSION=${GOVER#go}" >> $GITHUB_ENV
+      - name: setup-go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '${{ env.GO_VERSION }}'
+          check-latest: true
+      - name: get project dependencies
+        run: go mod download
+      - name: release
+        run: | 
+          mkdir -p buildx
+          go build -o buildx/release -trimpath -ldflags "-s -w -buildid=" ./main
+          pushd buildx || exit 1
+          zip -9vr ../release.zip .
+          popd || exit 1
+      - name: Install minisign and sign
+        run: |
+          sudo apt-get -y install libsodium-dev
+          git clone --depth 1 https://github.com/jedisct1/minisign.git
+          cd minisign/src
+          mkdir -p /tmp/bin
+          cc -O2 -o /tmp/bin/minisign -D_GNU_SOURCE *.c -lsodium
+          cd -
+          /tmp/bin/minisign -v
+          echo "${{ secrets.MINISIGN_SK }}" >> /tmp/minisign.key
+          echo | /tmp/bin/minisign -s /tmp/minisign.key -Sm *.zip
+          mv buildx release
+      - name: Upload files to Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: release
+          path: |
+            ./release/*
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./release.zip*
+          tag: ${{ steps.get_version.outputs.VER }}
+          overwrite: true
+          file_glob: true
