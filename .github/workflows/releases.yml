@@ -37,7 +37,7 @@ jobs:
       - name: release
         run: | 
           mkdir -p buildx
-          go build -o buildx/release -trimpath -ldflags "-s -w -buildid=" ./main
+          CGO_ENABLED=0 go build -o buildx/release -trimpath -ldflags "-s -w -buildid=" ./main
           pushd buildx || exit 1
           zip -9vr ../release.zip .
           popd || exit 1
